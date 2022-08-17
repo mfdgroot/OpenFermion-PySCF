@@ -83,8 +83,8 @@ class PyscfMolecularData(MolecularData):
             n_orbitals = mo.shape[1]
 
             eri = ao2mo.kernel(mol, mo)
-            eri = ao2mo.restore(1, # no permutation symmetry
-                                eri, n_orbitals)
+            # No permutation symmetry
+            eri = ao2mo.restore(1, eri, n_orbitals)
             # See PQRS convention in OpenFermion.hamiltonians.molecular_data
             # h[p,q,r,s] = (ps|qr) = pyscf_eri[p,s,q,r]
             self._two_body_integrals = numpy.asarray(
@@ -266,14 +266,15 @@ class PyscfMolecularData(MolecularData):
             no, nv = t1.shape
             nmo = no + nv
             self._ccsd_single_amps = numpy.zeros((nmo, nmo))
-            self._ccsd_single_amps[no:,:no] = t1.T
+            self._ccsd_single_amps[no:, :no] = t1.T
 
         return self._ccsd_single_amps
 
     @property
     def ccsd_double_amps(self):
-        r"""A 4-dimension array t[a,i,b,j] for CCSD double excitation amplitudes
-        where a, b are virtual indices and i, j are occupied indices.
+        r"""A 4-dimension array t[a,i,b,j] for CCSD double excitation
+        amplitudes where a, b are virtual indices and i, j are occupied
+        indices.
         """
         if self._ccsd_double_amps is None:
             ccsd = self._pyscf_data.get('ccsd', None)
@@ -284,7 +285,8 @@ class PyscfMolecularData(MolecularData):
             no, nv = t2.shape[1:3]
             nmo = no + nv
             self._ccsd_double_amps = numpy.zeros((nmo, nmo, nmo, nmo))
-            self._ccsd_double_amps[no:,:no,no:,:no] = .5 * t2.transpose(2,0,3,1)
+            self._ccsd_double_amps[no:, :no, no:, :no] = \
+                .5 * t2.transpose(2, 0, 3, 1)
 
         return self._ccsd_double_amps
 

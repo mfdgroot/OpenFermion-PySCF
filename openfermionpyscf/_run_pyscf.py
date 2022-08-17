@@ -87,9 +87,9 @@ def compute_integrals(pyscf_molecule, pyscf_scf):
     two_electron_compressed = ao2mo.kernel(pyscf_molecule,
                                            pyscf_scf.mo_coeff)
 
+    # No permutation symmetry
     two_electron_integrals = ao2mo.restore(
-        1, # no permutation symmetry
-        two_electron_compressed, n_orbitals)
+        1, two_electron_compressed, n_orbitals)
     # See PQRS convention in OpenFermion.hamiltonians._molecular_data
     # h[p,q,r,s] = (ps|qr)
     two_electron_integrals = numpy.asarray(
@@ -252,7 +252,7 @@ def generate_molecular_hamiltonian(
     # Run electronic structure calculations
     molecule = run_pyscf(
             MolecularData(
-                geometry, basis, multiplicity, charge, 
+                geometry, basis, multiplicity, charge,
                 data_directory=data_directory)
     )
 
@@ -273,6 +273,7 @@ def generate_molecular_hamiltonian(
     return molecule.get_molecular_hamiltonian(
             occupied_indices=occupied_indices,
             active_indices=active_indices)
+
 
 def calculate_force_integrals(
         pyscf_mol, pyscf_scf, atmlst=None, hcore_mo=None, tei_mo=None):
