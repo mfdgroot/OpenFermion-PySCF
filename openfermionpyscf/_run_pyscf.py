@@ -227,7 +227,8 @@ def generate_molecular_hamiltonian(
         multiplicity,
         charge=0,
         n_active_electrons=None,
-        n_active_orbitals=None):
+        n_active_orbitals=None,
+        data_directory=None):
     """Generate a molecular Hamiltonian with the given properties.
 
     Args:
@@ -250,7 +251,9 @@ def generate_molecular_hamiltonian(
 
     # Run electronic structure calculations
     molecule = run_pyscf(
-            MolecularData(geometry, basis, multiplicity, charge)
+            MolecularData(
+                geometry, basis, multiplicity, charge, 
+                data_directory=data_directory)
     )
 
     # Freeze core orbitals and truncate to active space

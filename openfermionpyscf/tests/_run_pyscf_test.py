@@ -17,6 +17,9 @@ from openfermion.chem import MolecularData
 from openfermionpyscf import run_pyscf
 from openfermionpyscf import PyscfMolecularData
 
+import tempfile
+
+data_dir = tempfile.mkdtemp(prefix="openfermionpyscf_test")
 
 geometry = [('H', (0., 0., 0.)), ('H', (0., 0., 0.7414))]
 basis = '6-31g'
@@ -25,7 +28,8 @@ charge = 0
 molecule = MolecularData(geometry,
                          basis,
                          multiplicity,
-                         charge)
+                         charge,
+                         data_directory=data_dir)
 
 
 def test_run_pyscf():
@@ -35,5 +39,7 @@ def test_run_pyscf():
                          run_cisd=True,
                          run_ccsd=True,
                          run_fci=True,
+                         forces=True,
                          verbose=1)
+
     assert isinstance(new_mole, PyscfMolecularData)
