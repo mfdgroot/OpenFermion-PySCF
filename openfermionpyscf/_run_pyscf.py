@@ -19,8 +19,10 @@ from functools import reduce
 import numpy
 from pyscf import gto, scf, ao2mo, ci, cc, fci, mp
 
-from openfermion import MolecularData
+from openfermion import MolecularData, general_basis_change
 from openfermionpyscf import PyscfMolecularData
+from ._nuclear_gradient_integrals import hcore_generator, \
+    eri_generator, overlap_generator
 
 
 def prepare_pyscf_molecule(molecule):
@@ -85,9 +87,9 @@ def compute_integrals(pyscf_molecule, pyscf_scf):
     two_electron_compressed = ao2mo.kernel(pyscf_molecule,
                                            pyscf_scf.mo_coeff)
 
+    # No permutation symmetry
     two_electron_integrals = ao2mo.restore(
-        1, # no permutation symmetry
-        two_electron_compressed, n_orbitals)
+        1, two_electron_compressed, n_orbitals)
     # See PQRS convention in OpenFermion.hamiltonians._molecular_data
     # h[p,q,r,s] = (ps|qr)
     two_electron_integrals = numpy.asarray(
@@ -103,6 +105,7 @@ def run_pyscf(molecule,
               run_cisd=False,
               run_ccsd=False,
               run_fci=False,
+              forces=False,
               verbose=False):
     """
     This function runs a pyscf calculation.
@@ -114,6 +117,7 @@ def run_pyscf(molecule,
         run_cisd: Optional boolean to run CISD calculation.
         run_ccsd: Optional boolean to run CCSD calculation.
         run_fci: Optional boolean to FCI calculation.
+        forces: Optional boolean to get nuclear gradient matrix elements.
         verbose: Boolean whether to print calculation results to screen.
 
     Returns:
@@ -199,10 +203,21 @@ def run_pyscf(molecule,
             print('FCI energy for {} ({} electrons) is {}.'.format(
                 molecule.name, molecule.n_electrons, molecule.fci_energy))
 
+    # Get gradients
+    if forces:
+        one_body_force_integrals, \
+            two_body_force_integrals = calculate_force_integrals(
+                                        pyscf_molecule, pyscf_scf)
+        pyscf_data['forces'] = {'f1': one_body_force_integrals,
+                                'f2': two_body_force_integrals}
+        molecule._one_body_force_integrals = one_body_force_integrals
+        molecule._two_body_force_integrals = two_body_force_integrals
+
     # Return updated molecule instance.
     pyscf_molecular_data = PyscfMolecularData.__new__(PyscfMolecularData)
     pyscf_molecular_data.__dict__.update(molecule.__dict__)
     pyscf_molecular_data.save()
+
     return pyscf_molecular_data
 
 
@@ -212,7 +227,8 @@ def generate_molecular_hamiltonian(
         multiplicity,
         charge=0,
         n_active_electrons=None,
-        n_active_orbitals=None):
+        n_active_orbitals=None,
+        data_directory=None):
     """Generate a molecular Hamiltonian with the given properties.
 
     Args:
@@ -235,7 +251,9 @@ def generate_molecular_hamiltonian(
 
     # Run electronic structure calculations
     molecule = run_pyscf(
-            MolecularData(geometry, basis, multiplicity, charge)
+            MolecularData(
+                geometry, basis, multiplicity, charge,
+                data_directory=data_directory)
     )
 
     # Freeze core orbitals and truncate to active space
@@ -255,3 +273,114 @@ def generate_molecular_hamiltonian(
     return molecule.get_molecular_hamiltonian(
             occupied_indices=occupied_indices,
             active_indices=active_indices)
+
+
+def calculate_force_integrals(
+        pyscf_mol, pyscf_scf, atmlst=None, hcore_mo=None, tei_mo=None):
+    r"""
+        Obtain gradient operator integrals in physicist ordering
+
+    Args:
+        pyscf_mol (pyscf.Mole): Object holding AO integrals.
+        pyscf_scf (pyscf.scf): SCF object holding the molecular orbital
+            coefficients.
+
+    Returns:
+        f1mos (ndarray): An N_a by 3 by N by N array storing the one-body
+            part of the force operators.
+        f2mos (ndarray): An N_a by 3 by N by N by N by N array storing the
+            two-body part of the force operators.
+    """
+    norbs = pyscf_mol.nao
+
+    hcore_deriv = hcore_generator(pyscf_mol)
+    ovrlp_deriv = overlap_generator(pyscf_mol)
+    eri_deriv = eri_generator(pyscf_mol)
+
+    if atmlst is None:
+        atmlst = range(pyscf_mol.natm)
+
+    if hcore_mo is None:
+        hcore_mo = general_basis_change(
+                    pyscf_mol.get_hcore(), pyscf_scf.mo_coeff, key=(1, 0)
+                    )
+
+    if tei_mo is None:
+        tei_mo_compressed = ao2mo.kernel(pyscf_mol, pyscf_scf.mo_coeff)
+        tei_mo = ao2mo.restore(1, tei_mo_compressed, norbs)
+
+    f1mos = numpy.zeros((len(atmlst), 3, norbs, norbs))
+    f2mos = numpy.zeros((len(atmlst), 3, norbs, norbs, norbs, norbs))
+
+    for k, ia in enumerate(atmlst):
+        h1ao = hcore_deriv(ia)
+        s1ao = ovrlp_deriv(ia)
+        eriao = eri_deriv(ia)
+        s1mo = numpy.zeros_like(s1ao)
+
+        for xyz in range(3):
+            # Core-MO - Hellmann-Feynman term
+            f1mos[k, xyz] = general_basis_change(
+                            h1ao[xyz], pyscf_scf.mo_coeff, key=(1, 0)
+                            )
+
+            # X-S-MO
+            s1mo[xyz] = general_basis_change(
+                            s1ao[xyz], pyscf_scf.mo_coeff, key=(1, 0)
+                            )
+
+            # one-body part of wavefunction force
+            f1mos[k, xyz] += 0.5 * (
+                            numpy.einsum('pj,ip->ij', hcore_mo, s1mo[xyz]) +
+                            numpy.einsum('ip,jp->ij', hcore_mo, s1mo[xyz])
+                            )
+
+            # eriao in openfermion ordering Hellmann-Feynman term
+            f2mos[k, xyz] -= general_basis_change(
+                                eriao[xyz], pyscf_scf.mo_coeff,
+                                key=(1, 0, 1, 0)
+                                ).transpose((0, 2, 3, 1))
+
+            # two-body part of wavefunction force
+            f2mos[k, xyz] += 0.5 * (
+                                numpy.einsum('px,xqrs', s1mo[xyz], tei_mo) +
+                                numpy.einsum('qx,pxrs', s1mo[xyz], tei_mo) +
+                                numpy.einsum('rx,pqxs', s1mo[xyz], tei_mo) +
+                                numpy.einsum('sx,pqrx', s1mo[xyz], tei_mo)
+                                )
+
+    return f1mos, f2mos
+
+
+def generate_nuclear_forces(
+        geometry,
+        basis,
+        multiplicity,
+        charge=0,
+        data_directory=None):
+    """Generate nuclear gradient operators.
+
+    Args:
+        geometry: A list of tuples giving the coordinates of each atom.
+            An example is [('H', (0, 0, 0)), ('H', (0, 0, 0.7414))].
+            Distances in angstrom. Use atomic symbols to
+            specify atoms.
+        basis: A string giving the basis set. An example is 'cc-pvtz'.
+            Only optional if loading from file.
+        multiplicity: An integer giving the spin multiplicity.
+        charge: An integer giving the charge.
+
+    Returns:
+        A list of lists of forces as InteractionOperator.
+    """
+
+    # Run electronic structure calculations
+    molecule = run_pyscf(
+                        MolecularData(
+                            geometry, basis, multiplicity, charge,
+                            data_directory=data_directory
+                            ),
+                        forces=True
+                    )
+
+    return molecule.get_nuclear_forces()

@@ -18,6 +18,7 @@ from ._pyscf_molecular_data import PyscfMolecularData
 
 from ._run_pyscf import (
         generate_molecular_hamiltonian,
+        generate_nuclear_forces,
         prepare_pyscf_molecule,
         run_pyscf)
 
